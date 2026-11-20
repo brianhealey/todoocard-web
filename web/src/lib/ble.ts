@@ -85,6 +85,7 @@ const OPTIONAL_SERVICES: BluetoothServiceUUID[] = [
   UUIDS.batteryService,
   UUIDS.deviceInfoService,
   UUIDS.diagnosticsService,
+  UUIDS.otaService,
 ];
 
 export function isWebBluetoothSupported(): boolean {
@@ -148,6 +149,9 @@ export class TodooCardClient extends EventTarget {
       { manufacturerData: [{ companyIdentifier: 0x5053 }] },
       { namePrefix: 'TodooCard' },
       { services: [UUIDS.imageService] },
+      // Recovery/debug firmware may advertise only the OTA service (e.g. a card
+      // named "NEMR…" with no battery/image services) — still let it be picked.
+      { services: [UUIDS.otaService] },
     ];
     let device: BluetoothDevice;
     try {

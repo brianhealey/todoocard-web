@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigResponse } from '@shared/api';
 import { DevicePanel } from './components/DevicePanel';
 import { Editor } from './components/Editor';
+import { FirmwarePanel } from './components/FirmwarePanel';
 import { SendPanel } from './components/SendPanel';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SourcePanel, type SourceImage } from './components/SourcePanel';
@@ -125,6 +126,7 @@ export function App() {
       <main className="layout">
         <aside className="col col-device">
           <DevicePanel client={client} info={info} connected={connected} />
+          <FirmwarePanel client={client} info={info} connected={connected} />
         </aside>
         <section className="col col-image">
           <SourcePanel settings={settings} config={config} onSource={onSource} current={source} />

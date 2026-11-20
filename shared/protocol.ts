@@ -35,6 +35,9 @@ export const UUIDS = {
   /** Undocumented 22-byte status record; captured raw so counters can be decoded over time. */
   diagnosticsStatus: 'd8b282f0-0f9b-4a7a-b5e8-8e6e5a3c1002',
   diagnosticsImageAck: 'd8b282f0-0f9b-4a7a-b5e8-8e6e5a3c1003',
+  /** Telink OTA service + characteristic (firmware update). */
+  otaService: '00010203-0405-0607-0809-0a0b0c0d1912',
+  otaCharacteristic: '00010203-0405-0607-0809-0a0b0c0d2b12',
 } as const;
 
 /** Firmware thresholds (raw firmware byte). */
