@@ -332,9 +332,9 @@ export class TodooCardClient extends EventTarget {
         this.log('warn', `Connect failed: ${msg}`);
         if (attempt === 3) {
           const hint = /Unsupported device/i.test(msg)
-            ? ' Chrome could not open a GATT connection. Make sure the card is not connected to another app, wait a few seconds (the card reboots after a refresh) and try again.'
+            ? ' Chrome refused the connection before contacting the card. This usually means another app or browser tab on this computer is holding the card, or Chrome is using a stale handle for it. Close other Bluetooth apps and tabs using the card, wait a few seconds, then choose the card again. If it keeps happening, turn Bluetooth off and on.'
             : '';
-          throw new BleError(`Could not connect: ${msg}.${hint}`, 'connect', e);
+          throw new BleError(`Could not connect: ${msg.replace(/\.+$/, '')}.${hint}`, 'connect', e);
         }
         await sleep(attempt === 1 ? 750 : 1500);
       }

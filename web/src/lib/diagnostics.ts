@@ -198,6 +198,7 @@ export function buildDiagnostics(i: DiagnosticsInput) {
           encryptedLinkVerified: info.bonded,
           model: info.model ?? null,
           serial: info.serial ?? null,
+          serialNote: info.serial ? null : 'Not available in browsers: Chrome hides the Serial Number characteristic (2A25) from web pages. Native tools (bleak, nRF Connect) can read it.',
           firmwareString: info.firmwareString ?? null,
           firmwareVersion: info.firmwareRaw ?? null,
           hardware: info.hardware ?? null,

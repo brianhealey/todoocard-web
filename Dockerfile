@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run build && npm prune --omit=dev
+# Stamped into the web bundle (diagnostics file); the build context has no .git.
+ARG GIT_COMMIT=""
+RUN GIT_COMMIT="$GIT_COMMIT" npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
 ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0
