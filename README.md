@@ -22,7 +22,8 @@ using your own API keys.
 - **Search** images via Openverse or Wikimedia Commons (no key), Pexels, Unsplash,
   Pixabay, Google Programmable Search, Brave or SerpApi (your key).
 - **Generate** images with OpenAI GPT Image (newest model your key can use, e.g.
-  gpt-image-2.6-flare; gpt-image-1 was retired by OpenAI in October 2026), Stability AI,
+  gpt-image-2.6-flare; gpt-image-1 was retired by OpenAI in October 2026), xAI Grok Imagine,
+  Stability AI,
   Google Imagen or Replicate (FLUX etc.), with the card's 2:3 aspect ratio.
 - **Send** with progress, cancel, protocol log and the card's refresh acknowledgement
   as the only success signal.
@@ -83,6 +84,17 @@ The connection is shared: connect on any tab and the others see the same card.
   advertisements (firmware, pairing window, OTA recovery). *Build diagnostics file* downloads
   `todoocard-diagnostics-<timestamp>.json`; it contains no API keys and nothing from Settings, but
   it does contain the card's name, serial and Bluetooth identity.
+  *Inspect any Bluetooth device* on the same tab opens an unfiltered device list for hardware
+  that is not a TodooCard. A browser only shows the services a page asks for before the device is
+  chosen, so it requests the TodooCard services, a built-in list of common ones (Device
+  Information, Battery, Heart Rate, Nordic UART and others) and any UUIDs you type in the box
+  (`180d`, `0x180d` or a full 128-bit UUID; remembered in this browser). Blocklisted services such
+  as HID `0x1812` are dropped and listed. The survey lists every visible service, characteristic
+  and descriptor and reads each readable value as raw hex (up to 200 reads, 5 s each); it never
+  writes or subscribes, and it keeps what it read if the device drops. That device stays separate
+  from the Send and Firmware tabs. The diagnostics file (schema version 2) records `mode`,
+  `requestedServices`, `rejectedServices` and a `limitations` list, so a missing service can be
+  told apart from one that was never asked for.
 
 Tabs are addressable (`#send`, `#firmware`, `#troubleshoot`) and keyboard accessible (arrow keys, Home, End).
 
@@ -159,7 +171,8 @@ when `watchAdvertisements()` is available.
 Environment variables: `PORT`, `APP_ACCESS_TOKEN` (when set, clients must send `X-App-Token`),
 `ALLOW_CLIENT_KEYS` (default `true`), and per-provider keys: `PEXELS_API_KEY`,
 `UNSPLASH_ACCESS_KEY`, `PIXABAY_API_KEY`, `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX`, `BRAVE_SEARCH_KEY`,
-`SERPAPI_KEY`, `OPENAI_API_KEY`, `STABILITY_API_KEY`, `GEMINI_API_KEY`, `REPLICATE_API_TOKEN`.
+`SERPAPI_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `STABILITY_API_KEY`, `GEMINI_API_KEY`,
+`REPLICATE_API_TOKEN`.
 Requests are rate limited per client IP (search 60/min, generate 10/min, image 120/min).
 
 Adding a provider is one file in `server/providers/search` or `server/providers/generate`

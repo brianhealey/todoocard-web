@@ -11,11 +11,12 @@ import { openai } from './generate/openai.js';
 import { stability } from './generate/stability.js';
 import { googleImagen } from './generate/google.js';
 import { replicate } from './generate/replicate.js';
+import { xai } from './generate/xai.js';
 
 export const searchProviders: Record<string, SearchProvider> = Object.fromEntries(
   [openverse, wikimedia, pexels, unsplash, pixabay, googleCse, brave, serpapi].map((p) => [p.descriptor.id, p]),
 );
 
 export const generateProviders: Record<string, GenerateProvider> = Object.fromEntries(
-  [openai, stability, googleImagen, replicate].map((p) => [p.descriptor.id, p]),
+  [openai, xai, stability, googleImagen, replicate].map((p) => [p.descriptor.id, p]),
 );

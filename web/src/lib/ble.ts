@@ -24,6 +24,7 @@ import {
   type ImageAckDiagnostics,
   type StatusRecord,
 } from '@shared/protocol';
+import { TODOOCARD_SERVICES } from './uuids';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 export interface LogEntry {
@@ -104,17 +105,8 @@ export class BleError extends Error {
   }
 }
 
-const OPTIONAL_SERVICES: BluetoothServiceUUID[] = [
-  // Generic Access / Generic Attribute: listed only so the troubleshooting GATT table can show them.
-  0x1800,
-  0x1801,
-  UUIDS.imageService,
-  UUIDS.imageServiceAlt,
-  UUIDS.batteryService,
-  UUIDS.deviceInfoService,
-  UUIDS.diagnosticsService,
-  UUIDS.otaService,
-];
+/** Generic Access / Generic Attribute are listed only so the troubleshooting GATT table can show them. */
+const OPTIONAL_SERVICES: BluetoothServiceUUID[] = TODOOCARD_SERVICES;
 
 export function isWebBluetoothSupported(): boolean {
   return typeof navigator !== 'undefined' && 'bluetooth' in navigator && typeof navigator.bluetooth?.requestDevice === 'function';

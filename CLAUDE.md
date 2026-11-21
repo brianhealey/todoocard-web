@@ -25,12 +25,23 @@ Protocol behaviour may be learned from observation and documentation only.
   (`TodooCardClient`), `web/src/lib/transfer.ts` the transfer state machine, `compose.ts` canvas
   composition, `api.ts` + `settings.ts` the backend client and localStorage settings,
   `ota.ts` the flasher, `firmware.ts` the catalog (bundled manifest + vendor merge),
-  `diagnostics.ts` the read-only GATT survey and the diagnostics-file builder.
+  `diagnostics.ts` the read-only GATT survey and the diagnostics-file builder (schema v2: `mode`,
+  `requestedServices`, `rejectedServices`, `limitations`; never remove a field older files had),
+  `uuids.ts` pure UUID parsing, the generic-mode service list, the Web Bluetooth service
+  blocklist and friendly names, `inspect.ts` the "Inspect any Bluetooth device" mode
+  (`GenericInspector` + `surveyGeneric`).
   - `App.tsx` owns three top-level tabs (`components/Tabs.tsx`, ARIA tablist): **Send** (image
     workflow), **Firmware** (`FirmwarePanel`: all flashing, vendor check, recovery connect),
     **Troubleshoot** (`TroubleshootPanel` + `TroubleshootTools`). Panels stay mounted while
     hidden so a running transfer or OTA keeps its state; one `TodooCardClient` (`useClient`) is
     shared by all tabs. The Troubleshoot tab must never write to the card or start notifications.
+  - Generic inspection (`acceptAllDevices`) keeps its device in `GenericInspector`, owned by
+    `TroubleshootPanel`; never `attach()` that device to `TodooCardClient`, so Send and Firmware
+    cannot act on a non-TodooCard. It uses its own operation queue, or `TodooCardClient.op()` when
+    the chosen device is the client's own card. Put the per-read timeout inside the queued
+    operation so a hung read cannot block the queue. On a TodooCard (FEF0/FDF0 or the diagnostics
+    service) it must not read 2A19. Web Bluetooth cannot discover services that were not in
+    `optionalServices` at chooser time; new defaults go in `STANDARD_SERVICES`.
 - `server/` Hono on Node 22: `index.ts` routes, `firmware.ts` host-locked vendor update proxy
   (relays v185+ only), `proxy.ts` SSRF-guarded image fetch, `keys.ts`
   key resolution (client keys first, env second), `ratelimit.ts`, `providers/{search,generate}/*`.

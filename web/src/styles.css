@@ -152,6 +152,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .gatt-head { margin-bottom: 4px; }
 .gatt-char { border-top: 1px solid var(--line); padding: 6px 0 4px; font-size: 0.9rem; }
 .gatt-char .chip.small { margin-left: 0; margin-right: 4px; }
+.gatt-desc { margin-top: 2px; }
+.plain-list { margin: 4px 0 0; padding-left: 1.2rem; }
 .symptoms { display: flex; flex-direction: column; gap: 4px; }
 .symptom { border-top: 1px solid var(--line); padding: 6px 0; }
 .symptom:first-child { border-top: none; }

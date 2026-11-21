@@ -80,7 +80,21 @@ export async function verifyFirmware(bytes: Uint8Array, expectedSha256: string, 
   }
 }
 
+/**
+ * Run a firmware update. The client is marked busy for the whole update so nothing else
+ * (for example a troubleshooting survey of the same card) can interleave GATT operations.
+ */
 export async function runOtaUpdate(client: TodooCardClient, opts: OtaOptions): Promise<OtaResult> {
+  const wasBusy = client.busy;
+  client.busy = true;
+  try {
+    return await runOtaUpdateInner(client, opts);
+  } finally {
+    client.busy = wasBusy;
+  }
+}
+
+async function runOtaUpdateInner(client: TodooCardClient, opts: OtaOptions): Promise<OtaResult> {
   const { firmware, receiverVersion = 0, signal } = opts;
   const started = performance.now();
   const emit = (p: Omit<OtaProgress, 'totalBytes'>) => opts.onProgress?.({ ...p, totalBytes: firmware.length });

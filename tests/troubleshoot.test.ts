@@ -128,7 +128,7 @@ describe('diagnostics file', () => {
 
   it('carries every section the troubleshooting tab promises', () => {
     expect(doc.schema).toBe('todoocard-web.diagnostics');
-    expect(doc.schemaVersion).toBe(1);
+    expect(doc.schemaVersion).toBe(2);
     expect(doc.generatedAt).toBe('2026-11-20T12:34:56.789Z');
     expect(doc.app).toMatchObject({ version: '0.1.0', commit: 'abc123' });
     expect(doc.userAgent).toBe('test-agent');

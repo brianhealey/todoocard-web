@@ -9,9 +9,22 @@ import { MIN_FLASHABLE_VERSION } from '@shared/firmware';
 import { UUIDS, gattName, hex, parseImageAckDiagnostics, parseStatusRecord, shortUuid, type ImageAckDiagnostics, type StatusRecord } from '@shared/protocol';
 import type { AdvSnapshot, AdvWatchState, DeviceInfo, LogEntry, TodooCardClient } from './ble';
 import type { FirmwareEntry } from './firmware';
+import { TODOOCARD_SERVICES, type RejectedService } from './uuids';
 
 export const DIAGNOSTICS_SCHEMA = 'todoocard-web.diagnostics';
-export const DIAGNOSTICS_SCHEMA_VERSION = 1;
+/** v2 adds `mode`, `requestedServices`, `rejectedServices`, `limitations` and the generic survey fields; every v1 field is kept. */
+export const DIAGNOSTICS_SCHEMA_VERSION = 2;
+
+export type DiagnosticsMode = 'todoocard' | 'generic';
+
+export interface GattDescriptorRow {
+  uuid: string;
+  short: string;
+  name?: string;
+  /** Text of Characteristic User Description (0x2901); other descriptors are listed, not read. */
+  valueText?: string;
+  error?: string;
+}
 
 export interface GattCharRow {
   uuid: string;
@@ -23,6 +36,9 @@ export interface GattCharRow {
   /** Why a readable value was not read, or what the value means. */
   note?: string;
   error?: string;
+  /** Generic survey only: descriptors of this characteristic, when the browser could list them. */
+  descriptors?: GattDescriptorRow[];
+  descriptorsError?: string;
 }
 
 export interface GattServiceRow {
@@ -35,10 +51,22 @@ export interface GattServiceRow {
 
 export interface GattScan {
   t: number;
+  /** Which survey produced this; absent means the TodooCard survey. */
+  mode?: DiagnosticsMode;
   services: GattServiceRow[];
   statusRecord?: StatusRecord;
   imageAck?: ImageAckDiagnostics;
   error?: string;
+  /** Generic survey: the device has the TodooCard image or diagnostics service. */
+  isTodooCard?: boolean;
+  /** Generic survey: connected, but none of the requested services exist on the device. */
+  noServices?: boolean;
+  /** Generic survey: the device dropped the link part-way; `services` holds what was read until then. */
+  disconnected?: boolean;
+  /** Generic survey: stopped early (read limit, time limit or an unresponsive device). */
+  truncated?: boolean;
+  readCount?: number;
+  notes?: string[];
 }
 
 /** Readable without encryption and without side effects; everything else is listed but not read. */
@@ -175,7 +203,22 @@ export interface DiagnosticsInput {
   lastLinkMs: number | null;
   log: LogEntry[];
   catalog: FirmwareEntry[] | null;
+  /** Which kind of device the file describes. Default: `todoocard`. */
+  mode?: DiagnosticsMode;
+  /** Canonical UUIDs passed to the chooser as `optionalServices`. Default: the TodooCard list. */
+  requestedServices?: string[];
+  /** Services that were wanted but not requested (blocklisted, invalid, refused by the browser). */
+  rejectedServices?: RejectedService[];
 }
+
+/** What a browser cannot show, so a reader does not take a gap for a fact about the device. */
+export const DIAGNOSTICS_LIMITATIONS: string[] = [
+  'The browser hides every service that was not requested when the device was chosen: a service missing from gatt.services is absent only if it is listed in requestedServices.',
+  'Chrome hides the Serial Number characteristic (2A25) from web pages.',
+  'Advertisement data needs chrome://flags/#enable-experimental-web-platform-features; without it advertisements.snapshots is empty.',
+  'Services on the Web Bluetooth blocklist (for example HID 0x1812) are never exposed to web pages.',
+  'Encrypted characteristics are not read automatically; nothing is written and no notifications are enabled, so notify-only values are not captured.',
+];
 
 const iso = (t: number) => new Date(t).toISOString();
 
@@ -186,6 +229,10 @@ export function buildDiagnostics(i: DiagnosticsInput) {
     schema: DIAGNOSTICS_SCHEMA,
     schemaVersion: DIAGNOSTICS_SCHEMA_VERSION,
     generatedAt: i.now.toISOString(),
+    mode: (i.mode ?? 'todoocard') as DiagnosticsMode,
+    limitations: DIAGNOSTICS_LIMITATIONS,
+    requestedServices: i.requestedServices ?? TODOOCARD_SERVICES,
+    rejectedServices: (i.rejectedServices ?? []).map((r) => ({ input: r.input, uuid: r.uuid ?? null, reason: r.reason })),
     app: { name: 'todoocard-web', version: i.app.version, commit: i.app.commit || null, apiVersion: i.app.apiVersion ?? null },
     userAgent: i.userAgent,
     bluetooth: i.capabilities,
@@ -224,7 +271,20 @@ export function buildDiagnostics(i: DiagnosticsInput) {
         decoded: a.decoded ?? null,
       })),
     },
-    gatt: i.gatt ? { readAt: iso(i.gatt.t), error: i.gatt.error ?? null, services: i.gatt.services } : null,
+    gatt: i.gatt
+      ? {
+          readAt: iso(i.gatt.t),
+          error: i.gatt.error ?? null,
+          services: i.gatt.services,
+          survey: i.gatt.mode ?? 'todoocard',
+          isTodooCard: i.gatt.isTodooCard ?? null,
+          noRequestedServicesPresent: i.gatt.noServices ?? false,
+          disconnectedDuringSurvey: i.gatt.disconnected ?? false,
+          truncated: i.gatt.truncated ?? false,
+          readCount: i.gatt.readCount ?? null,
+          notes: i.gatt.notes ?? [],
+        }
+      : null,
     values: {
       batteryLevel: i.batteryRead ? { readAt: iso(i.batteryRead.t), percent: i.batteryRead.percent ?? null, error: i.batteryRead.error ?? null } : null,
     },

@@ -3,8 +3,10 @@ import { MIN_FLASHABLE_VERSION } from '@shared/firmware';
 import { FW, statusCodeName } from '@shared/protocol';
 import type { AdvState } from '../hooks/useClient';
 import type { BleError, DeviceInfo, LogEntry, TodooCardClient } from '../lib/ble';
-import { buildDiagnostics, collectCapabilities, diagnosticsFileName, downloadJson, scanGatt, type BluetoothCapabilities, type GattScan } from '../lib/diagnostics';
+import { buildDiagnostics, collectCapabilities, diagnosticsFileName, downloadJson, scanGatt, type BluetoothCapabilities, type DiagnosticsMode, type GattScan } from '../lib/diagnostics';
 import { entryBuildNumber, type FirmwareEntry } from '../lib/firmware';
+import { GENERIC_MAX_READS, GenericInspector, genericDeviceInfo, type InspectorState } from '../lib/inspect';
+import { STANDARD_SERVICES, buildRequestedServices } from '../lib/uuids';
 import { AdvertDecoder, AdvertFields, FirmwareChecker, SymptomGuide } from './TroubleshootTools';
 
 interface Props {
@@ -20,6 +22,14 @@ interface Props {
 }
 
 const FLAG_URL = 'chrome://flags/#enable-experimental-web-platform-features';
+const UUID_BOX_KEY = 'todoocard-web.inspect-uuids.v1';
+const loadUuidBox = () => {
+  try {
+    return localStorage.getItem(UUID_BOX_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
 
 export function TroubleshootPanel({ client, info, connected, log, clearLog, adv, bundled, apiVersion, onOpenFirmware }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -31,6 +41,27 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
   const [copied, setCopied] = useState<string | null>(null);
   const [lastLinkMs, setLastLinkMs] = useState<number | null>(null);
   const logBox = useRef<HTMLPreElement>(null);
+  // "Inspect any Bluetooth device": its own device and connection, never handed to the Send or Firmware tabs.
+  const inspector = useMemo(() => new GenericInspector(client), [client]);
+  const [gState, setGState] = useState<InspectorState | null>(null);
+  const [gScan, setGScan] = useState<GattScan | null>(null);
+  const [gError, setGError] = useState<string | null>(null);
+  const [uuidText, setUuidText] = useState(loadUuidBox);
+  const [fileMode, setFileMode] = useState<DiagnosticsMode>('todoocard');
+
+  useEffect(() => {
+    const onChange = () => setGState(inspector.state);
+    inspector.addEventListener('change', onChange);
+    return () => inspector.removeEventListener('change', onChange);
+  }, [inspector]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(UUID_BOX_KEY, uuidText);
+    } catch {
+      /* private mode: the box still works for this visit */
+    }
+  }, [uuidText]);
 
   useEffect(() => {
     collectCapabilities().then(setCaps);
@@ -97,27 +128,65 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
       }
     });
 
+  const runGeneric = async (label: string, fn: () => Promise<void>) => {
+    setBusy(label);
+    setGError(null);
+    try {
+      await fn();
+    } catch (e) {
+      const err = e as BleError;
+      if (err.code !== 'cancelled') {
+        setGError(err.message ?? String(e));
+        client.log('error', `Generic inspection: ${err.message ?? String(e)}`);
+      }
+    } finally {
+      setBusy(null);
+      setGState(inspector.state);
+    }
+  };
+  const inspectAny = (pick: boolean) =>
+    runGeneric('g-inspect', async () => {
+      if (pick || !inspector.device) {
+        await inspector.choose(uuidText);
+        setGScan(null);
+      }
+      setFileMode('generic');
+      await inspector.connect();
+      setGState(inspector.state);
+      // Partial results are shown as they arrive and kept if the device drops.
+      setGScan(await inspector.survey(setGScan));
+    });
+  // Recomputed after each chooser attempt too, so UUIDs the browser refused show up as rejected.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const wanted = useMemo(() => buildRequestedServices(uuidText, inspector.refused), [uuidText, inspector, gState]);
+  const builtInCount = useMemo(() => buildRequestedServices('').requested.length, []);
+  const listChanged = !!gState && gState.requested.join() !== wanted.requested.join();
+
   const latest = useMemo(() => bundled?.find((e) => e.latest) ?? null, [bundled]);
   const latestBuild = latest ? entryBuildNumber(latest) : 0;
   const fw = info?.firmwareRaw;
   const lastAdv = adv.snapshots[adv.snapshots.length - 1];
 
+  const generic = fileMode === 'generic' ? gState : null;
   const diagnosticsText = () =>
     JSON.stringify(
       buildDiagnostics({
+        mode: generic ? 'generic' : 'todoocard',
+        requestedServices: generic?.requested,
+        rejectedServices: generic?.rejected,
         now: new Date(),
         app: { version: __APP_VERSION__, commit: __APP_COMMIT__, apiVersion },
         userAgent: navigator.userAgent,
         capabilities: caps,
         note,
-        connected,
-        info,
-        advWatch: adv.watch,
-        advWatchError: adv.error,
-        advertisements: adv.snapshots,
-        gatt,
-        batteryRead,
-        lastLinkMs,
+        connected: generic ? generic.connected : connected,
+        info: generic ? genericDeviceInfo(generic, gScan) : info,
+        advWatch: generic ? (caps?.watchAdvertisements ? 'idle' : 'unsupported') : adv.watch,
+        advWatchError: generic ? null : adv.error,
+        advertisements: generic ? [] : adv.snapshots,
+        gatt: generic ? gScan : gatt,
+        batteryRead: generic ? null : batteryRead,
+        lastLinkMs: generic ? generic.lastLinkMs : lastLinkMs,
         log,
         catalog: bundled,
       }),
@@ -242,6 +311,114 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
         </div>
 
         <div className="card">
+          <h2>Inspect any Bluetooth device</h2>
+          <p className="muted small">
+            For devices that are not TodooCards. The device list is unfiltered, and the survey reads every readable value as raw bytes. It never writes to the device and
+            never turns on notifications. The Send and Firmware tabs do not use a device chosen here.
+          </p>
+          <p className="muted small">
+            A browser shows only the services a page asks for before the device is chosen. This asks for {builtInCount} common ones; add any others your device uses
+            below.
+          </p>
+          <details className="help">
+            <summary>Services asked for by default ({builtInCount})</summary>
+            <p className="small muted">
+              The TodooCard services, plus:{' '}
+              {STANDARD_SERVICES.map((s) => `${s.name} (${s.uuid.endsWith('-0000-1000-8000-00805f9b34fb') ? s.uuid.slice(4, 8) : s.uuid})`).join(', ')}.
+            </p>
+          </details>
+          <label className="field">
+            <span className="muted small">Extra service UUIDs (optional): 16-bit like 180d or 0x180d, or full 128-bit; separate with commas, spaces or new lines</span>
+            <textarea
+              rows={2}
+              className="mono"
+              value={uuidText}
+              maxLength={8000}
+              spellCheck={false}
+              onChange={(e) => setUuidText(e.target.value)}
+              placeholder="180d, 0xfe95, 6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+            />
+          </label>
+          <p className="muted small">
+            {wanted.requested.length} service(s) will be requested, {wanted.requested.length - builtInCount} from this box.
+            {listChanged && ' The list has changed since this device was chosen: choose it again to apply it.'}
+          </p>
+          {wanted.rejected.length > 0 && (
+            <div className="banner warn small">
+              Not requested:
+              <ul className="plain-list">
+                {wanted.rejected.map((r, i) => (
+                  <li key={i}>
+                    <span className="mono breakall">{r.input}</span>: {r.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="row gap wrap">
+            <button className="btn primary" disabled={!!busy} onClick={() => inspectAny(true)}>
+              {busy === 'g-inspect' ? 'Working…' : gState ? 'Choose another device' : 'Inspect any Bluetooth device'}
+            </button>
+            {gState && (
+              <button className="btn" disabled={!!busy} onClick={() => inspectAny(false)}>
+                {gState.connected ? 'Read again' : 'Reconnect and read'}
+              </button>
+            )}
+            {gState?.connected && (
+              <button className="btn" onClick={() => inspector.disconnect()} title={gState.sameAsCard ? 'This also disconnects the card on the Send and Firmware tabs' : undefined}>
+                Disconnect
+              </button>
+            )}
+          </div>
+          {gError && <div className="banner error">{gError}</div>}
+          {gState && (
+            <table className="kv">
+              <tbody>
+                <tr>
+                  <th>Status</th>
+                  <td>
+                    <span className={`dot ${gState.connected ? 'on' : 'off'}`} /> {gState.connected ? 'connected' : 'disconnected'}
+                    {gScan?.isTodooCard && <span className="chip ok small">TodooCard</span>}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Name</th>
+                  <td>{gState.name}</td>
+                </tr>
+                <tr>
+                  <th>Browser id</th>
+                  <td className="mono small breakall">{gState.id}</td>
+                </tr>
+                <tr>
+                  <th>Services</th>
+                  <td>
+                    {gScan ? `${gScan.services.length} visible of ${gState.requested.length} requested` : `${gState.requested.length} requested`}
+                    {gScan?.readCount !== undefined ? ` · ${gScan.readCount} value(s) read (limit ${GENERIC_MAX_READS})` : ''}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+          {gState?.sameAsCard && (
+            <div className="banner">This is the card already selected on the Send and Firmware tabs. It is surveyed here read-only, over the same connection.</div>
+          )}
+          {gScan?.isTodooCard && !gState?.sameAsCard && (
+            <div className="banner">
+              This device is a TodooCard, so its diagnostics records are decoded below. To send images or update firmware, connect to it on the Send or Firmware tab;
+              those tabs do not use this connection.
+            </div>
+          )}
+          {gScan?.error && <div className="banner warn">{gScan.error}</div>}
+          {gScan?.notes?.map((n, i) => (
+            <div key={i} className="banner warn">
+              {n}
+            </div>
+          ))}
+          {gScan && <GattTable scan={gScan} />}
+          {gScan && <DiagRecords scan={gScan} />}
+        </div>
+
+        <div className="card">
           <h2>What the card advertises</h2>
           {adv.watch === 'unsupported' && (
             <div className="banner">
@@ -353,87 +530,8 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
             </p>
           )}
           {gatt?.error && <div className="banner warn">{gatt.error}</div>}
-          {gatt && gatt.services.length > 0 && (
-            <div className="gatt">
-              {gatt.services.map((s) => (
-                <div key={s.uuid} className="gatt-service">
-                  <div className="gatt-head">
-                    <strong>{s.name ?? 'Unknown service'}</strong> <span className="mono muted small breakall">{s.short}</span>
-                  </div>
-                  {s.error && <div className="small muted">Could not list characteristics: {s.error}</div>}
-                  {s.characteristics.map((c) => (
-                    <div key={c.uuid} className="gatt-char">
-                      <div>
-                        {c.name ?? 'Unknown characteristic'} <span className="mono muted small breakall">{c.short}</span>
-                      </div>
-                      <div className="small">
-                        {c.properties.map((p) => (
-                          <span key={p} className="chip small">
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                      {c.valueHex !== undefined && (
-                        <div className="mono small breakall">
-                          {c.valueText !== undefined ? `“${c.valueText}” · ` : ''}
-                          {c.valueHex || '(empty)'}
-                        </div>
-                      )}
-                      {c.note && <div className="small muted">{c.note}</div>}
-                      {c.error && <div className="small muted">Read failed: {c.error}</div>}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-          {gatt?.statusRecord && (
-            <>
-              <h3>Diagnostics status record (…1002)</h3>
-              <table className="kv small">
-                <tbody>
-                  <tr>
-                    <th>Phase</th>
-                    <td>
-                      {statusCodeName(gatt.statusRecord.statusCode)} (0x{gatt.statusRecord.statusCode.toString(16).padStart(2, '0')})
-                      {gatt.statusRecord.markerOk ? ' · format markers present' : ' · unexpected markers (different firmware layout?)'}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Event counter</th>
-                    <td>{gatt.statusRecord.eventCounter}</td>
-                  </tr>
-                  <tr>
-                    <th>Other fields</th>
-                    <td className="mono">
-                      {gatt.statusRecord.aux.join(', ')} <span className="muted">(tentative)</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </>
-          )}
-          {gatt?.imageAck && (
-            <>
-              <h3>Image-transfer record (…1003)</h3>
-              <table className="kv small">
-                <tbody>
-                  <tr>
-                    <th>Acknowledgements</th>
-                    <td>
-                      generated {gatt.imageAck.generated}, attempts {gatt.imageAck.attempts}, accepted {gatt.imageAck.accepted}, rejected {gatt.imageAck.rejected}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Last result</th>
-                    <td>
-                      code 0x{gatt.imageAck.lastNotifyResult.toString(16).padStart(2, '0')} {gatt.imageAck.lastNotifyResult === 0 ? '(ok)' : ''} · last block {gatt.imageAck.lastReceivedBlock}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </>
-          )}
+          {gatt && <GattTable scan={gatt} />}
+          {gatt && <DiagRecords scan={gatt} />}
         </div>
       </div>
 
@@ -471,6 +569,15 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
             <span className="muted small">What happened? (optional, included in the file)</span>
             <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: flashed v187, card rebooted, now it drops two seconds after connecting." />
           </label>
+          {gState && (
+            <label className="field">
+              <span className="muted small">The file describes</span>
+              <select value={fileMode} onChange={(e) => setFileMode(e.target.value as DiagnosticsMode)}>
+                <option value="todoocard">the TodooCard connection (Inspect a card)</option>
+                <option value="generic">the generic device: {gState.name}</option>
+              </select>
+            </label>
+          )}
           <div className="row gap wrap tool-examples">
             <button
               className="btn primary"
@@ -502,5 +609,115 @@ export function TroubleshootPanel({ client, info, connected, log, clearLog, adv,
         </p>
       </div>
     </div>
+  );
+}
+
+/** Services, characteristics, values and descriptors of one survey (either mode). */
+function GattTable({ scan }: { scan: GattScan }) {
+  return (
+    <>
+    {scan.services.length > 0 && (
+      <div className="gatt">
+        {scan.services.map((s) => (
+          <div key={s.uuid} className="gatt-service">
+            <div className="gatt-head">
+              <strong>{s.name ?? 'Unknown service'}</strong> <span className="mono muted small breakall">{s.short}</span>
+            </div>
+            {s.error && <div className="small muted">Could not list characteristics: {s.error}</div>}
+            {s.characteristics.map((c) => (
+              <div key={c.uuid} className="gatt-char">
+                <div>
+                  {c.name ?? 'Unknown characteristic'} <span className="mono muted small breakall">{c.short}</span>
+                </div>
+                <div className="small">
+                  {c.properties.map((p) => (
+                    <span key={p} className="chip small">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+                {c.valueHex !== undefined && (
+                  <div className="mono small breakall">
+                    {c.valueText !== undefined ? `“${c.valueText}” · ` : ''}
+                    {c.valueHex || '(empty)'}
+                  </div>
+                )}
+                {c.note && <div className="small muted">{c.note}</div>}
+                {c.error && <div className="small muted">Read failed: {c.error}</div>}
+                {c.descriptors && c.descriptors.length > 0 && (
+                  <div className="small muted gatt-desc">
+                    Descriptors:{' '}
+                    {c.descriptors.map((d, i) => (
+                      <span key={i}>
+                        {i > 0 ? ', ' : ''}
+                        {d.name ?? 'Unknown'} <span className="mono breakall">{d.short}</span>
+                        {d.valueText !== undefined ? ` “${d.valueText}”` : ''}
+                        {d.error ? ` (read failed: ${d.error})` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    )}
+    </>
+  );
+}
+
+/** Decoded TodooCard diagnostics records, when the survey read them. */
+function DiagRecords({ scan }: { scan: GattScan }) {
+  return (
+    <>
+    {scan.statusRecord && (
+      <>
+        <h3>Diagnostics status record (…1002)</h3>
+        <table className="kv small">
+          <tbody>
+            <tr>
+              <th>Phase</th>
+              <td>
+                {statusCodeName(scan.statusRecord.statusCode)} (0x{scan.statusRecord.statusCode.toString(16).padStart(2, '0')})
+                {scan.statusRecord.markerOk ? ' · format markers present' : ' · unexpected markers (different firmware layout?)'}
+              </td>
+            </tr>
+            <tr>
+              <th>Event counter</th>
+              <td>{scan.statusRecord.eventCounter}</td>
+            </tr>
+            <tr>
+              <th>Other fields</th>
+              <td className="mono">
+                {scan.statusRecord.aux.join(', ')} <span className="muted">(tentative)</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </>
+    )}
+    {scan.imageAck && (
+      <>
+        <h3>Image-transfer record (…1003)</h3>
+        <table className="kv small">
+          <tbody>
+            <tr>
+              <th>Acknowledgements</th>
+              <td>
+                generated {scan.imageAck.generated}, attempts {scan.imageAck.attempts}, accepted {scan.imageAck.accepted}, rejected {scan.imageAck.rejected}
+              </td>
+            </tr>
+            <tr>
+              <th>Last result</th>
+              <td>
+                code 0x{scan.imageAck.lastNotifyResult.toString(16).padStart(2, '0')} {scan.imageAck.lastNotifyResult === 0 ? '(ok)' : ''} · last block {scan.imageAck.lastReceivedBlock}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </>
+    )}
+    </>
   );
 }
