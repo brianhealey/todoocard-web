@@ -26,6 +26,12 @@ using your own API keys.
   Google Imagen or Replicate (FLUX etc.), with the card's 2:3 aspect ratio.
 - **Send** with progress, cancel, protocol log and the card's refresh acknowledgement
   as the only success signal.
+- **Firmware** tab: flash the bundled firmware (v187, or v185) over the card's Telink OTA
+  channel, check the vendor update service, and reconnect to a card in OTA recovery without pairing.
+  Every image is validated before a byte is sent (see [Firmware policy](#firmware-policy)).
+- **Troubleshoot** tab: connect without pairing, see what the card advertises, list its
+  services and characteristics, read the diagnostics records, and build a diagnostics JSON file
+  to attach to a bug report. Also a firmware file checker, an advertisement decoder and a symptom guide.
 
 ## Requirements
 
@@ -62,6 +68,57 @@ The card only accepts a new computer while its physical pairing window is open.
 
 A card that disconnects about a second after connecting is refusing an unbonded computer: reopen the window and try again.
 
+## The three tabs
+
+The connection is shared: connect on any tab and the others see the same card.
+
+- **Send** is the image workflow: connect and pair, pick or generate a picture, edit, send.
+- **Firmware** holds everything that flashes: the firmware list, the vendor update check, the
+  update log, and *Connect for recovery (no pairing)* for a card that is in OTA recovery or shows
+  no firmware version.
+- **Troubleshoot** never writes to the card. *Choose card and connect* opens a GATT-only link and
+  reads Device Information, the two diagnostics records and the OTA characteristic; the encrypted
+  Battery Level is read only when you press its button, because that starts pairing. With
+  `chrome://flags/#enable-experimental-web-platform-features` enabled it also decodes the card's
+  advertisements (firmware, pairing window, OTA recovery). *Build diagnostics file* downloads
+  `todoocard-diagnostics-<timestamp>.json`; it contains no API keys and nothing from Settings, but
+  it does contain the card's name, serial and Bluetooth identity.
+
+Tabs are addressable (`#send`, `#firmware`, `#troubleshoot`) and keyboard accessible (arrow keys, Home, End).
+
+## Firmware policy
+
+> **Disclaimer: flashing firmware is entirely at your own risk.** It can permanently brick a card,
+> and a card that no longer connects over Bluetooth cannot be repaired from a browser, a phone or
+> the vendor app. This is an unofficial tool, not made, endorsed or supported by Sunbelife; it is
+> provided "as is" without warranty of any kind (see `LICENSE`), and the author and contributors
+> accept no responsibility or liability for bricked or damaged cards, lost images, voided
+> warranties or any other consequence. The checks described below reduce the risk; they do not
+> remove it. The Firmware tab shows this disclaimer and requires an explicit acknowledgement
+> before every flash.
+
+**Nothing below v185 is bundled or accepted.** The app used to offer the legacy images
+`SE0368NW40-T3-1.0.2 … 1.0.10`. Flashing 1.0.10 left a card unusable over Bluetooth: in images
+1.0.4–1.0.10 the link layer's empty-packet template (the last words of `.data`) is
+`02000000 ffffffff` instead of `02000000 01000000`, so the card's idle packets are malformed and no
+standard Bluetooth controller can hold a connection to it. Recovering that card took a custom link
+layer on an nRF52840. 1.0.2 and 1.0.3 are intact but have no pairing and no recovery channel, so
+they are gone too.
+
+- Bundled: **v187** (newest, from the vendor Android app 1.2.22; the vendor update API still
+  reports v185 as its newest stable release) and **v185** (previous stable). `web/public/firmware/manifest.json`
+  lists size, sha256, CRC32 trailer and the vendor's recovery proof for each.
+- `shared/firmware.ts` is the guard. `inspectFirmware()` checks what the card enforces (`KNLT` at
+  offset 8, declared size at 0x18 equal to the file length, size > 0x3fff, ≤ 0x1f000 and
+  `size & 0xf == 4`, CRC32 over the file equal to 0xFFFFFFFF) plus what it does not: the
+  empty-packet template in the last 32 bytes before the CRC trailer. `flashVerdict()` then refuses
+  anything invalid, anything from the 1.0.x line and anything whose version is below 185.
+  `runOtaUpdate()` calls it before touching the card, so the rule holds for bundled images,
+  vendor-fetched images and any source added later. The server applies the same floor to releases
+  it relays from the vendor service.
+- A card that is already on 1.0.4–1.0.10 cannot be fixed from a browser; the symptom guide on the
+  Troubleshoot tab says what it needs.
+
 ## How it works
 
 ```
@@ -95,6 +152,8 @@ when `watchAdvertisements()` is available.
 | `POST /api/search` | `{provider, query, page?, orientation?, keys?}` → normalised results |
 | `POST /api/generate` | `{provider, prompt, aspect, keys?, options?}` → image bytes |
 | `POST /api/models` | `{provider, keys?}` → image models the key can use (OpenAI), best first |
+| `GET /api/firmware/check?current_build=&recovery=` | asks the vendor update service for a newer T3 release (v185+ only) |
+| `GET /api/firmware/artifact/:id/:kind` | relays a vendor release (`download`) or its recovery proof (`proof`); host-locked, no client URL |
 | `GET /api/image?url=` | CORS-free image fetch with SSRF protection (public hosts only, 25 MB, image types only) |
 
 Environment variables: `PORT`, `APP_ACCESS_TOKEN` (when set, clients must send `X-App-Token`),
@@ -118,12 +177,12 @@ Protect a public instance with `APP_ACCESS_TOKEN` or Cloudflare Access; otherwis
 
 ```bash
 npm run dev          # vite + tsx watch
-npm test             # vitest: protocol parsing, pipeline, vendor parity
+npm test             # vitest: protocol parsing, pipeline, vendor parity, firmware validator, manifest integrity
 npm run typecheck
 npm run fixtures     # regenerate tests/fixtures/upright.png (expected.*.bin come from the vendor converter)
 ```
 
-Layout: `shared/` (protocol constants, image pipeline, payload builders: pure TS used by both sides),
+Layout: `shared/` (protocol constants, image pipeline, payload builders, OTA codec, firmware validator: pure TS used by both sides),
 `web/` (React + Vite app, Web Bluetooth client and transfer state machine in `web/src/lib`),
 `server/` (Hono API and providers), `tests/`, `deploy/`.
 

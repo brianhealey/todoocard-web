@@ -12,6 +12,7 @@ import { ALLOW_CLIENT_KEYS, KeyError, describe, resolveKeys } from './keys.js';
 import { generateProviders, searchProviders } from './providers/index.js';
 import { UpstreamError } from './providers/types.js';
 import { ProxyError, fetchImage } from './proxy.js';
+import { checkFirmware, fetchArtifact } from './firmware.js';
 import { RateLimiter } from './ratelimit.js';
 
 const require = createRequire(import.meta.url);
@@ -58,6 +59,7 @@ const limits = {
   search: new RateLimiter(60, 1),
   generate: new RateLimiter(10, 10 / 60),
   image: new RateLimiter(120, 2),
+  firmware: new RateLimiter(60, 1),
 };
 
 function clientIp(c: { req: { header: (n: string) => string | undefined }; env: unknown }): string {
@@ -88,6 +90,32 @@ app.get('/api/config', (c) => {
     providers: [...Object.values(searchProviders), ...Object.values(generateProviders)].map(describe),
   };
   return c.json(body);
+});
+
+// Proxy the vendor firmware update service. Failures return a graceful
+// "no update" so the client falls back to its bundled catalog.
+app.get('/api/firmware/check', async (c) => {
+  if (!limits.firmware.take(clientIp(c))) return c.json({ update_available: false, release: null, error: 'ratelimit' });
+  const currentBuild = parseInt(c.req.query('current_build') ?? '0', 10);
+  const recovery = c.req.query('recovery') === 'true';
+  try {
+    return c.json(await checkFirmware(currentBuild, recovery));
+  } catch (e) {
+    return c.json({ update_available: false, release: null, error: (e as Error).message });
+  }
+});
+
+app.get('/api/firmware/artifact/:id/:kind', async (c) => {
+  if (!limits.firmware.take(clientIp(c))) return c.json({ error: 'Too many requests', code: 'ratelimit' }, 429);
+  const id = c.req.param('id');
+  const kind = c.req.param('kind');
+  if (kind !== 'download' && kind !== 'proof') return c.json({ error: 'bad artifact kind', code: 'badrequest' }, 400);
+  try {
+    const { bytes, contentType } = await fetchArtifact(id, kind);
+    return new Response(bytes, { headers: { 'content-type': contentType, 'cache-control': 'no-store' } });
+  } catch (e) {
+    return c.json({ error: `Vendor artifact fetch failed: ${(e as Error).message}`, code: 'upstream' }, 502);
+  }
 });
 
 app.post('/api/search', async (c) => {

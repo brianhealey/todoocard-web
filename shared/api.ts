@@ -81,3 +81,25 @@ export interface ModelsRequest {
 export interface ModelsResponse {
   models: Array<{ id: string; label?: string; recommended?: boolean }>;
 }
+
+/** A firmware release from the vendor update service (cam-api.todoo.tech), proxied by our server. */
+export interface VendorRelease {
+  id: string;
+  model: string;
+  rawType: number;
+  channel: string;
+  version: string;
+  buildNumber: number;
+  mandatory: boolean;
+  releaseNotes: string;
+  publishedAt?: string;
+  sizeBytes: number;
+  sha256: string;
+  storedCrc32: string;
+}
+
+export interface FirmwareCheckResponse {
+  update_available: boolean;
+  release: VendorRelease | null;
+  error?: string;
+}

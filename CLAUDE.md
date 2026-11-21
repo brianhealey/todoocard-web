@@ -18,10 +18,21 @@ Protocol behaviour may be learned from observation and documentation only.
   - `image.ts` Floyd–Steinberg six-ink dithering, nibble packing, T3 panel calibration
     (vertical flip), controller raster order.
   - `payload.ts` raw payload for v157+, QuickLZ *stored-block* container (framing only) for older firmware.
+  - `ota.ts` Telink OTA codec (packets, CRC16/CRC32, schedule-ACK parsing).
+  - `firmware.ts` the firmware image validator and flash gate (`inspectFirmware`, `flashVerdict`,
+    `MIN_FLASHABLE_VERSION`, own SHA-256). See "Firmware catalog policy".
 - `web/` Vite + React 18 + TypeScript. `web/src/lib/ble.ts` is the Web Bluetooth client
   (`TodooCardClient`), `web/src/lib/transfer.ts` the transfer state machine, `compose.ts` canvas
-  composition, `api.ts` + `settings.ts` the backend client and localStorage settings.
-- `server/` Hono on Node 22: `index.ts` routes, `proxy.ts` SSRF-guarded image fetch, `keys.ts`
+  composition, `api.ts` + `settings.ts` the backend client and localStorage settings,
+  `ota.ts` the flasher, `firmware.ts` the catalog (bundled manifest + vendor merge),
+  `diagnostics.ts` the read-only GATT survey and the diagnostics-file builder.
+  - `App.tsx` owns three top-level tabs (`components/Tabs.tsx`, ARIA tablist): **Send** (image
+    workflow), **Firmware** (`FirmwarePanel`: all flashing, vendor check, recovery connect),
+    **Troubleshoot** (`TroubleshootPanel` + `TroubleshootTools`). Panels stay mounted while
+    hidden so a running transfer or OTA keeps its state; one `TodooCardClient` (`useClient`) is
+    shared by all tabs. The Troubleshoot tab must never write to the card or start notifications.
+- `server/` Hono on Node 22: `index.ts` routes, `firmware.ts` host-locked vendor update proxy
+  (relays v185+ only), `proxy.ts` SSRF-guarded image fetch, `keys.ts`
   key resolution (client keys first, env second), `ratelimit.ts`, `providers/{search,generate}/*`.
 - `tests/` vitest. `tests/fixtures/expected*.bin` were produced by the vendor converter from
   `upright.png`; `image.test.ts` requires byte-identical output. Do not regenerate the expected
@@ -32,7 +43,7 @@ Protocol behaviour may be learned from observation and documentation only.
 
 ```bash
 npm run dev          # vite :5173 (proxies /api) + tsx watch server :8787
-npm test             # vitest (protocol parsing, pipeline, vendor parity)
+npm test             # vitest (protocol parsing, pipeline, vendor parity, firmware validator + manifest)
 npm run typecheck    # both tsconfigs (web: Bundler resolution, server: NodeNext)
 npm run build        # dist/web + dist/server; `npm start` serves both on :8787
 docker build -t todoocard-web .   # image runs as numeric USER 100:101
@@ -60,6 +71,30 @@ NodeNext; keep that convention.
   `TodooCardClient.op()`. Pass real `ArrayBuffer`s to `writeValue*` (TS 5.7 BufferSource typing).
 - A v187 card transferred 872 blocks in ~9 s from Chrome; it disconnects after `05 08` while it
   redraws, so a post-send disconnect is expected.
+
+## Firmware catalog policy
+
+- **Nothing below v185, ever.** Bundled: v187 (latest; from vendor Android app 1.2.22, the vendor
+  API still reports v185) and v185. Do not re-add the `SE0368NW40-T3-1.0.*` images: 1.0.4–1.0.10
+  have a damaged link-layer empty-packet template (`02000000 ffffffff` instead of
+  `02000000 01000000` at the end of `.data`), so a card running them cannot hold a connection with
+  any standard controller; one had to be rescued with a custom nRF52840 link layer
+  (`todoocard-firmware/docs/recovery-log.md`).
+- Every flash goes through `flashVerdict(inspectFirmware(image))` inside `runOtaUpdate()`; do not
+  add a path that bypasses it. It enforces the card's own rules (KNLT at 8, declared size at 0x18
+  == length, size > 0x3fff, <= 0x1f000, `size & 0xf == 4`, crc32(file) == 0xFFFFFFFF), the
+  empty-packet template in the last 32 bytes before the CRC trailer, and version >= 185 (known
+  hash, else the embedded `0xNN` revision string, else the catalog's build number).
+- The Firmware tab carries a prominent own-risk / no-warranty / no-liability disclaimer and an
+  acknowledgement checkbox that gates every flash (reset after each one). Keep both; do not
+  weaken the wording or make the acknowledgement sticky.
+- Adding a firmware: put the `.bin` and its `<sha256>.proof.json` in `web/public/firmware/`, add
+  the manifest entry (exactly one `latest`, the highest build) and the hash in `KNOWN_FIRMWARE`.
+  `tests/firmware.test.ts` checks every listed file (size, sha256, CRC, proof) and fails on any
+  unlisted `.bin` or any version below 185.
+- Advertisement byte 3 is a flag byte only on firmware >= v140; below that it is a battery
+  reading (`decodeManufacturerData`). Legacy 1.0.x advertises as `TodooCard-<MAC>`, or
+  `TodooRescue` on external power; that is not a recovery mode.
 
 ## Backend rules
 

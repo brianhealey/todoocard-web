@@ -122,13 +122,15 @@ export function parseScheduleAck(bytes: Uint8Array, pdu: number, prevAcked: numb
   if (bytes.length < 4) return null;
   const op = bytes[0] | (bytes[1] << 8);
   if (op === 0xff08) {
-    const delta = bytes[2] | (bytes[3] << 8);
-    return delta > 0 ? Math.min(totalPackets, prevAcked + delta) : prevAcked;
+    // Absolute cumulative count of packets the device has received (observed:
+    // 0x10, 0x20, 0x30 … +16 per window). Never goes backwards.
+    const count = bytes[2] | (bytes[3] << 8);
+    return Math.min(totalPackets, Math.max(prevAcked, count));
   }
   if (op === 0xff09) {
     if (bytes.length < 6) return null;
     const absBytes = (bytes[2] | (bytes[3] << 8) | (bytes[4] << 16) | (bytes[5] << 24)) >>> 0;
-    return Math.min(totalPackets, Math.ceil(absBytes / pdu));
+    return Math.min(totalPackets, Math.max(prevAcked, Math.ceil(absBytes / pdu)));
   }
   return null;
 }

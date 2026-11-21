@@ -80,10 +80,13 @@ describe('ota firmware normalization', () => {
 });
 
 describe('ota schedule-ack parsing', () => {
-  it('adds a delta (0xFF08) and converts absolute bytes (0xFF09)', () => {
-    expect(parseScheduleAck(new Uint8Array([0x08, 0xff, 0x05, 0x00]), 16, 10, 100)).toBe(15);
-    // 0xFF09: absolute 160 bytes / pdu 16 = 10 packets
-    expect(parseScheduleAck(new Uint8Array([0x09, 0xff, 0xa0, 0x00, 0x00, 0x00]), 16, 0, 100)).toBe(10);
+  it('reads 0xFF08 as an absolute cumulative count (never backwards)', () => {
+    expect(parseScheduleAck(new Uint8Array([0x08, 0xff, 0x20, 0x00]), 16, 10, 100)).toBe(32); // 0x20 = 32
+    expect(parseScheduleAck(new Uint8Array([0x08, 0xff, 0x05, 0x00]), 16, 10, 100)).toBe(10); // stale ack: don't rewind
+    expect(parseScheduleAck(new Uint8Array([0x08, 0xff, 0xff, 0xff]), 16, 0, 100)).toBe(100); // clamp to total
+  });
+  it('converts 0xFF09 absolute bytes to packets', () => {
+    expect(parseScheduleAck(new Uint8Array([0x09, 0xff, 0xa0, 0x00, 0x00, 0x00]), 16, 0, 100)).toBe(10); // 160/16
     expect(parseScheduleAck(new Uint8Array([0x00, 0x00]), 16, 0, 100)).toBeNull();
   });
 });

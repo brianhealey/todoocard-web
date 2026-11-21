@@ -12,6 +12,7 @@ import {
   CAPABILITY,
   FW,
   UUIDS,
+  decodeManufacturerData,
   describeAdvertisement,
   hex as hexOf,
   parseFirmwareRevisionString,
@@ -19,6 +20,7 @@ import {
   parseManufacturerData,
   parseStatusRecord,
   type Advertisement,
+  type DecodedAdvertisement,
   type ImageAckDiagnostics,
   type StatusRecord,
 } from '@shared/protocol';
@@ -67,6 +69,29 @@ export interface DiagSnapshot {
 }
 
 const MAX_SNAPSHOTS = 12;
+const MAX_ADVERTISEMENTS = 20;
+
+/** One distinct advertisement payload seen from the selected card (repeats are counted, not stored). */
+export interface AdvSnapshot {
+  /** First and most recent time this exact payload was seen. */
+  t: number;
+  lastT: number;
+  count: number;
+  name?: string;
+  rssi?: number;
+  txPower?: number;
+  /** Manufacturer records as delivered by the browser (company id stripped from `hex`). */
+  manufacturerData: { companyId: number; hex: string }[];
+  serviceUuids: string[];
+  /** Decoded TodooCard (0x5053) record, when present. */
+  decoded?: DecodedAdvertisement;
+}
+
+/**
+ * `unsupported`: this browser has no `watchAdvertisements()` (Chrome needs
+ * chrome://flags/#enable-experimental-web-platform-features).
+ */
+export type AdvWatchState = 'idle' | 'unsupported' | 'watching' | 'error';
 
 function bytesOf(v: DataView): Uint8Array {
   return new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength));
@@ -80,6 +105,9 @@ export class BleError extends Error {
 }
 
 const OPTIONAL_SERVICES: BluetoothServiceUUID[] = [
+  // Generic Access / Generic Attribute: listed only so the troubleshooting GATT table can show them.
+  0x1800,
+  0x1801,
   UUIDS.imageService,
   UUIDS.imageServiceAlt,
   UUIDS.batteryService,
@@ -120,6 +148,15 @@ export class TodooCardClient extends EventTarget {
   private batteryChar: BluetoothRemoteGATTCharacteristic | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private advertisementAbort: AbortController | null = null;
+  /** Devices that already carry our event listeners (the chooser returns the same object again). */
+  private wired = new WeakSet<BluetoothDevice>();
+  /** Distinct advertisement payloads from the selected card, oldest first. */
+  advertisements: AdvSnapshot[] = [];
+  advWatch: AdvWatchState = 'idle';
+  advWatchError: string | null = null;
+  private linkStartedAt: number | null = null;
+  /** How long the last link lasted when the card (not this app) ended it; null otherwise. */
+  lastLinkMs: number | null = null;
 
   log(level: LogLevel, msg: string) {
     this.dispatchEvent(new CustomEvent<LogEntry>('log', { detail: { t: Date.now(), level, msg } }));
@@ -171,48 +208,109 @@ export class TodooCardClient extends EventTarget {
   }
 
   attach(device: BluetoothDevice) {
-    if (this.device && this.device !== device) this.disconnect();
+    if (this.device && this.device !== device) {
+      this.disconnect();
+      this.advertisements = [];
+    }
     this.device = device;
     this.info = { name: device.name ?? 'TodooCard', id: device.id, bonded: false };
-    device.addEventListener('gattserverdisconnected', () => {
-      this.log('warn', 'Disconnected');
-      this.control = null;
-      this.data = null;
-      this.batteryChar = null;
-      if (this.info) {
-        this.info.batteryLive = false;
-        this.emitInfo();
-      }
-      this.dispatchEvent(new Event('disconnected'));
-    });
+    if (!this.wired.has(device)) {
+      this.wired.add(device);
+      device.addEventListener('gattserverdisconnected', () => {
+        if (this.device !== device) return;
+        if (this.linkStartedAt !== null) {
+          this.lastLinkMs = Date.now() - this.linkStartedAt;
+          this.linkStartedAt = null;
+          this.log('warn', `Disconnected by the card or the link, ${(this.lastLinkMs / 1000).toFixed(1)} s after connecting`);
+        } else {
+          this.log('warn', 'Disconnected');
+        }
+        this.control = null;
+        this.data = null;
+        this.batteryChar = null;
+        if (this.info) {
+          this.info.batteryLive = false;
+          this.emitInfo();
+        }
+        this.dispatchEvent(new Event('disconnected'));
+      });
+      device.addEventListener('advertisementreceived', (ev: Event) => {
+        if (this.device === device) this.onAdvertisement(ev as BluetoothAdvertisingEvent);
+      });
+    }
     this.emitInfo();
-    this.startAdvertisementWatch().catch(() => undefined);
+    this.watchAdvertisements().catch(() => undefined);
   }
 
-  /** Advertisement watching is behind a flag in most Chrome builds; use it when present. */
-  private async startAdvertisementWatch() {
-    const dev = this.device as BluetoothDevice & { watchAdvertisements?: (o?: { signal?: AbortSignal }) => Promise<void> };
-    if (!dev || typeof dev.watchAdvertisements !== 'function') return;
+  private onAdvertisement(e: BluetoothAdvertisingEvent) {
+    const records: AdvSnapshot['manufacturerData'] = [];
+    let decoded: DecodedAdvertisement | undefined;
+    e.manufacturerData?.forEach((value, companyId) => {
+      const bytes = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+      records.push({ companyId, hex: hexOf(bytes) });
+      if (companyId === 0x5053) {
+        const full = new Uint8Array(bytes.length + 2);
+        full.set([0x53, 0x50]);
+        full.set(bytes, 2);
+        decoded = decodeManufacturerData(full) ?? undefined;
+        const adv = parseManufacturerData(bytes, false);
+        if (adv && this.info) {
+          this.info.advertisement = adv;
+          this.info.flags = describeAdvertisement(adv);
+          this.info.firmwareRaw = adv.firmwareRaw;
+        }
+      }
+    });
+    const now = Date.now();
+    const name = e.name ?? e.device?.name ?? undefined;
+    const serviceUuids = (e.uuids ?? []).map((u) => String(u));
+    const rssi = e.rssi ?? undefined;
+    const key = (s: Pick<AdvSnapshot, 'name' | 'manufacturerData' | 'serviceUuids'>) =>
+      `${s.name ?? ''}|${s.manufacturerData.map((m) => `${m.companyId}:${m.hex}`).join(',')}|${s.serviceUuids.join(',')}`;
+    const last = this.advertisements[this.advertisements.length - 1];
+    const snap = { name, manufacturerData: records, serviceUuids };
+    if (last && key(last) === key(snap)) {
+      last.lastT = now;
+      last.count++;
+      last.rssi = rssi;
+    } else {
+      this.advertisements = [...this.advertisements, { t: now, lastT: now, count: 1, rssi, txPower: e.txPower ?? undefined, decoded, ...snap }].slice(-MAX_ADVERTISEMENTS);
+      this.log('debug', `Advertisement: name=${name ?? '-'} rssi=${rssi ?? '-'} ${records.map((m) => `0x${m.companyId.toString(16)}=[${m.hex}]`).join(' ') || 'no manufacturer data'}`);
+    }
+    if (this.info) {
+      if (rssi !== undefined) this.info.rssi = rssi;
+      this.emitInfo();
+    }
+    this.dispatchEvent(new Event('advertisement'));
+  }
+
+  /**
+   * Start (or restart) watching the selected card's advertisements. This is
+   * behind a flag in most Chrome builds; `advWatch` says what happened. The card
+   * stops advertising while it is connected, so packets arrive only before a
+   * connection and after a disconnect.
+   */
+  async watchAdvertisements(): Promise<AdvWatchState> {
+    const dev = this.device as (BluetoothDevice & { watchAdvertisements?: (o?: { signal?: AbortSignal }) => Promise<void> }) | null;
+    const set = (state: AdvWatchState, error: string | null = null) => {
+      this.advWatch = state;
+      this.advWatchError = error;
+      this.dispatchEvent(new Event('advertisement'));
+      return state;
+    };
+    if (!dev) return set('idle');
+    if (typeof dev.watchAdvertisements !== 'function') return set('unsupported');
     this.advertisementAbort?.abort();
     const ac = new AbortController();
     this.advertisementAbort = ac;
-    dev.addEventListener('advertisementreceived', (ev: Event) => {
-      const e = ev as BluetoothAdvertisingEvent;
-      const md = e.manufacturerData?.get(0x5053);
-      if (!md || !this.info) return;
-      const adv = parseManufacturerData(new Uint8Array(md.buffer, md.byteOffset, md.byteLength), false);
-      if (!adv) return;
-      this.info.advertisement = adv;
-      this.info.flags = describeAdvertisement(adv);
-      this.info.firmwareRaw = adv.firmwareRaw;
-      this.info.rssi = e.rssi ?? undefined;
-      this.emitInfo();
-    });
     try {
       await dev.watchAdvertisements({ signal: ac.signal });
       this.log('debug', 'Watching advertisements');
-    } catch {
-      /* not supported */
+      return set('watching');
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      this.log('debug', `Advertisement watching failed: ${msg}`);
+      return set('error', msg);
     }
   }
 
@@ -224,7 +322,9 @@ export class TodooCardClient extends EventTarget {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         this.log('info', `Connecting (attempt ${attempt}/3) ...`);
+        this.lastLinkMs = null;
         this.server = await withTimeout(gatt.connect(), 15000, 'Timed out connecting');
+        this.linkStartedAt = Date.now();
         this.log('info', 'Connected');
         return;
       } catch (e) {
@@ -244,6 +344,8 @@ export class TodooCardClient extends EventTarget {
   disconnect() {
     this.advertisementAbort?.abort();
     this.advertisementAbort = null;
+    if (this.advWatch === 'watching') this.advWatch = 'idle';
+    this.linkStartedAt = null; // ended by us: not a drop
     try {
       this.device?.gatt?.disconnect();
     } catch {
@@ -434,6 +536,44 @@ export class TodooCardClient extends EventTarget {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * GATT-only connect: no pairing/bond, no battery read, device info best-effort.
+   * Nothing is written to the card.
+   */
+  private async connectUnpaired(doneMessage: string): Promise<DeviceInfo> {
+    this.busy = true;
+    try {
+      await this.connect();
+      try {
+        await this.readDeviceInfo(); // may expose almost nothing in recovery mode
+      } catch (e) {
+        this.log('warn', `Device info unavailable (${(e as Error).message}) — proceeding anyway.`);
+      }
+      if (this.info) {
+        this.info.bonded = false;
+        this.emitInfo();
+      }
+      this.log('info', doneMessage);
+      return this.info ?? { name: this.device?.name ?? 'TodooCard', id: this.device?.id ?? '', bonded: false };
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /**
+   * Connect for firmware recovery: for a bricked or OTA-recovery-mode card that
+   * can't complete normal pairing — the OTA service stays accessible as the
+   * recovery lifeline, so the firmware flasher can still reach it.
+   */
+  connectForRecovery(): Promise<DeviceInfo> {
+    return this.connectUnpaired('Connected in recovery mode (no pairing). You can flash firmware now.');
+  }
+
+  /** Connect for troubleshooting: look, do not touch. */
+  connectForInspection(): Promise<DeviceInfo> {
+    return this.connectUnpaired('Connected without pairing (GATT only).');
   }
 
   get requiresEncryptedGatt(): boolean {

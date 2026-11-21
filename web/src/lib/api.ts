@@ -75,3 +75,24 @@ export async function listModels(settings: Settings, provider: string): Promise<
   if (!res.ok) throw await parseError(res);
   return (await res.json()) as ModelsResponse;
 }
+
+/** Check the vendor firmware service (proxied by our server). Returns null on no-update or any failure. */
+export async function checkVendorFirmware(settings: Settings, currentBuild: number, recovery: boolean): Promise<import('@shared/api').VendorRelease | null> {
+  try {
+    const res = await fetch(`/api/firmware/check?current_build=${Math.max(0, currentBuild | 0)}&recovery=${recovery ? 'true' : 'false'}`, {
+      headers: headers(settings, false),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as import('@shared/api').FirmwareCheckResponse;
+    return body.update_available && body.release ? body.release : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Download a vendor firmware artifact (firmware binary or recovery proof) through our proxy. */
+export async function fetchVendorArtifact(settings: Settings, id: string, kind: 'download' | 'proof'): Promise<Uint8Array> {
+  const res = await fetch(`/api/firmware/artifact/${encodeURIComponent(id)}/${kind}`, { headers: headers(settings, false) });
+  if (!res.ok) throw await parseError(res);
+  return new Uint8Array(await res.arrayBuffer());
+}

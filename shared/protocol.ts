@@ -52,6 +52,8 @@ export const FW = {
 export const CAPABILITY = {
   encryptedGatt: 0x01,
   pairingWindowOpen: 0x02,
+  /** Bytes 7-12 of the manufacturer payload carry the full 6-byte device id. */
+  fullMac: 0x04,
   otaRecovery: 0x08,
   turboLink: 0x10,
 } as const;
@@ -110,16 +112,162 @@ export function parseManufacturerData(bytes: Uint8Array, includesCompanyId: bool
 }
 
 export function describeAdvertisement(a: Advertisement) {
-  const secure = a.screenType === SCREEN_TYPE_T3 && a.firmwareRaw >= FW.secureMinimum && (a.capabilityFlags & CAPABILITY.encryptedGatt) !== 0;
+  // Byte 3 is a flag byte only on secure-era firmware (>= v140); older firmware
+  // puts a battery reading there, so no flag may be derived from it.
+  const modern = a.screenType === SCREEN_TYPE_T3 && a.firmwareRaw >= FW.secureMinimum;
+  const secure = modern && (a.capabilityFlags & CAPABILITY.encryptedGatt) !== 0;
   return {
     isTodooCard: a.manufacturerId === MANUFACTURER_ID && a.screenType === SCREEN_TYPE_T3,
     secure,
     pairingWindowOpen: secure && (a.capabilityFlags & CAPABILITY.pairingWindowOpen) !== 0,
-    otaRecovery: (a.capabilityFlags & CAPABILITY.otaRecovery) !== 0,
-    turboLink: (a.capabilityFlags & CAPABILITY.turboLink) !== 0,
+    otaRecovery: modern && (a.capabilityFlags & CAPABILITY.otaRecovery) !== 0,
+    turboLink: modern && (a.capabilityFlags & CAPABILITY.turboLink) !== 0,
     firmwareVersion: a.firmwareRaw,
     pairingHoldSeconds: a.firmwareRaw >= FW.pairingHoldFiveSeconds ? 5 : 10,
   };
+}
+
+/** Everything the manufacturer payload says, for the troubleshooting views. */
+export interface DecodedAdvertisement {
+  /** Payload including the 2-byte company id, as hex. */
+  hex: string;
+  companyId: number;
+  companyIdOk: boolean;
+  screenType: number;
+  screenTypeOk: boolean;
+  firmwareRaw: number;
+  /** True for firmware >= v140, where byte 3 is a flag byte. */
+  modern: boolean;
+  flagsRaw?: number;
+  flags?: {
+    encryptedGatt: boolean;
+    pairingWindowOpen: boolean;
+    fullMac: boolean;
+    otaRecovery: boolean;
+    turboLink: boolean;
+    /** Bits set that this decoder has no name for. */
+    unknownBits: number;
+  };
+  /** Below v140 byte 3 is a battery reading (tenths of a volt when 20-60). */
+  batteryRaw?: number;
+  batteryVolts?: number;
+  /** Six-byte device id, when the FULL_MAC flag is set and the payload is long enough. */
+  deviceId?: string;
+  /** Legacy extended identity: two-character model and a semantic version such as 1.0.10. */
+  productModel?: string;
+  semanticVersion?: string;
+}
+
+/** Decode a manufacturer payload that includes the 2-byte company id (`53 50 4c ...`). */
+export function decodeManufacturerData(d: Uint8Array): DecodedAdvertisement | null {
+  if (d.length < 7) return null;
+  const companyId = d[0] | (d[1] << 8);
+  const screenType = d[2] | (d[6] << 8);
+  const firmwareRaw = d[4];
+  const modern = screenType === SCREEN_TYPE_T3 && firmwareRaw >= FW.secureMinimum;
+  const out: DecodedAdvertisement = {
+    hex: hex(d),
+    companyId,
+    companyIdOk: companyId === MANUFACTURER_ID,
+    screenType,
+    screenTypeOk: screenType === SCREEN_TYPE_T3,
+    firmwareRaw,
+    modern,
+  };
+  if (modern) {
+    const f = d[3];
+    const named = CAPABILITY.encryptedGatt | CAPABILITY.pairingWindowOpen | CAPABILITY.fullMac | CAPABILITY.otaRecovery | CAPABILITY.turboLink;
+    out.flagsRaw = f;
+    out.flags = {
+      encryptedGatt: (f & CAPABILITY.encryptedGatt) !== 0,
+      pairingWindowOpen: (f & CAPABILITY.pairingWindowOpen) !== 0,
+      fullMac: (f & CAPABILITY.fullMac) !== 0,
+      otaRecovery: (f & CAPABILITY.otaRecovery) !== 0,
+      turboLink: (f & CAPABILITY.turboLink) !== 0,
+      unknownBits: f & ~named & 0xff,
+    };
+    if (out.flags.fullMac && d.length >= 13) {
+      out.deviceId = Array.from(d.subarray(7, 13), (b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
+    }
+  } else {
+    out.batteryRaw = d[3];
+    if (d[3] >= 20 && d[3] <= 60) out.batteryVolts = d[3] / 10;
+    else if (d[3] >= 2 && d[3] <= 6) out.batteryVolts = d[3];
+  }
+  const isIdChar = (b: number) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a);
+  if (!out.flags?.fullMac && out.companyIdOk && d.length >= 12 && isIdChar(d[7]) && isIdChar(d[8])) {
+    out.productModel = String.fromCharCode(d[7], d[8]);
+    out.semanticVersion = `${d[9]}.${d[10]}.${d[11]}`;
+  }
+  return out;
+}
+
+/**
+ * Parse manufacturer data pasted as hex. Accepts spaces, colons, commas and
+ * `0x` prefixes, and the payload with or without the company id (`53 50` as
+ * sent on air, `5053` as the id is usually written, or a literal `SP`).
+ * Returns the payload including the company id.
+ */
+export function parseManufacturerHex(text: string): { bytes: Uint8Array; companyIdAdded: boolean } | { error: string } {
+  let t = text.trim();
+  let literalPrefix = false;
+  if (/^sp/i.test(t)) {
+    literalPrefix = true;
+    t = t.slice(2);
+  }
+  const digits = t.replace(/0x/gi, '').replace(/[\s:,;.\-_]/g, '');
+  if (!digits) return { error: 'Paste the manufacturer data as hex, for example 53 50 4c 11 bb 01 13.' };
+  if (!/^[0-9a-f]+$/i.test(digits)) return { error: 'Only hex digits (0-9, a-f) and separators are understood.' };
+  if (digits.length % 2 !== 0) return { error: 'An odd number of hex digits: a digit is missing.' };
+  const raw = new Uint8Array(digits.length / 2);
+  for (let i = 0; i < raw.length; i++) raw[i] = parseInt(digits.substr(i * 2, 2), 16);
+  const sp = new Uint8Array([MANUFACTURER_ID & 0xff, MANUFACTURER_ID >> 8]);
+  const startsWithId = raw.length >= 2 && ((raw[0] === 0x53 && raw[1] === 0x50) || (raw[0] === 0x50 && raw[1] === 0x53));
+  const companyIdAdded = !(literalPrefix || startsWithId);
+  const bytes = concat(sp, !literalPrefix && startsWithId ? raw.subarray(2) : raw);
+  if (bytes.length < 7) return { error: `Too short: ${bytes.length - 2} payload bytes, at least 5 are needed (type, flags, firmware and the screen type).` };
+  return { bytes, companyIdAdded };
+}
+
+/** Friendly names for the services and characteristics a TodooCard exposes. */
+const GATT_NAMES: Record<string, string> = {
+  '1800': 'Generic Access',
+  '1801': 'Generic Attribute',
+  '180a': 'Device Information',
+  '180f': 'Battery',
+  '2a00': 'Device Name',
+  '2a01': 'Appearance',
+  '2a04': 'Preferred Connection Parameters',
+  '2a05': 'Service Changed',
+  '2a19': 'Battery Level (encrypted: reading it starts pairing)',
+  '2a24': 'Model Number',
+  '2a25': 'Serial Number',
+  '2a26': 'Firmware Revision',
+  '2a27': 'Hardware Revision',
+  '2a29': 'Manufacturer Name',
+  fef0: 'TodooCard image service',
+  fef1: 'Image control (commands and acknowledgements)',
+  fef2: 'Image data (blocks)',
+  fef3: 'FEF3 (undocumented; identity string on legacy 1.0.x firmware)',
+  fdf0: 'Image service (older hardware)',
+  fdf1: 'Image control (older hardware)',
+  fdf2: 'Image data (older hardware)',
+  [UUIDS.diagnosticsService]: 'TodooCard diagnostics (read-only telemetry)',
+  [UUIDS.diagnosticsStatus]: 'Diagnostics status record (22 bytes)',
+  [UUIDS.diagnosticsImageAck]: 'Diagnostics image-ACK record (20 bytes)',
+  [UUIDS.otaService]: 'Telink OTA (firmware update)',
+  [UUIDS.otaCharacteristic]: 'Telink OTA data',
+};
+
+/** Short form of a Bluetooth-base UUID (`fef1`), else the lower-case 128-bit UUID. */
+export function shortUuid(uuid: string): string {
+  const u = uuid.toLowerCase();
+  const m = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/.exec(u);
+  return m ? m[1] : u;
+}
+
+export function gattName(uuid: string): string | undefined {
+  return GATT_NAMES[shortUuid(uuid)];
 }
 
 /**

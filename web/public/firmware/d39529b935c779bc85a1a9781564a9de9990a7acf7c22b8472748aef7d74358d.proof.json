@@ -1,0 +1,321 @@
+{
+  "schemaVersion": 5,
+  "status": "RECOVERY_OTA_PROOF_PASS",
+  "product": "TodooCard T3",
+  "chip": "TLSR8258",
+  "firmwareSha256": "d39529b935c779bc85a1a9781564a9de9990a7acf7c22b8472748aef7d74358d",
+  "firmwareSize": 98932,
+  "firmwareCrc32": "0x613495e1",
+  "sourceCommit": "37be886646ad5f18d763af93b2b0484481291bc3",
+  "partitionContract": {
+    "size": 524288,
+    "sectorSize": 4096,
+    "slotA": {
+      "start": 0,
+      "endExclusive": 126976
+    },
+    "slotB": {
+      "start": 131072,
+      "endExclusive": 258048
+    },
+    "userData": {
+      "start": 262144,
+      "endExclusive": 524288
+    },
+    "smp": {
+      "start": 475136,
+      "endExclusive": 479232
+    },
+    "mac": {
+      "start": 483328,
+      "endExclusive": 487424
+    },
+    "calibration": {
+      "start": 487424,
+      "endExclusive": 491520
+    },
+    "deviceData": {
+      "start": 491520,
+      "endExclusive": 524288
+    },
+    "recoveryJournal": {
+      "bank0": {
+        "start": 499712,
+        "endExclusive": 503808
+      },
+      "bank1": {
+        "start": 503808,
+        "endExclusive": 507904
+      }
+    }
+  },
+  "upgradeMatrix": {
+    "sources": 29,
+    "cases": 1740
+  },
+  "partialResidueMatrix": {
+    "images": 31,
+    "sectorsPerImage": 31,
+    "cases": 5471252,
+    "includesWithdrawn": true,
+    "includesCandidateRepeat": true
+  },
+  "recoveryOtaProof": {
+    "implementation": {
+      "elfPath": "/Users/Sun/Code/_feishu_workspaces/fei-a96e36a6/firmware-v186-near-white/825x_ble_sample/b85_ble_sdk.elf",
+      "elfSha256": "ae243554680b38ac180b0a4c5a94c718a024258e10ae83ba80eaf1f4de6527c7",
+      "markerSanitizedDuringTransfer": true,
+      "newMarkerWrittenBeforeOldMarkerClear": true,
+      "endActivatesThenReboots": true,
+      "recoveryGuardBeforeApplication": true,
+      "recoveryCoreBeforeBusiness": true,
+      "zeroBondPairingAfterCore": true,
+      "deepRetentionDoesNotAutoPair": true,
+      "recoveryBranchBeforeBusiness": true,
+      "otaStartArmsCandidateTrial": true,
+      "otaFailureRestoresGuard": true,
+      "otaFailureInvalidatesJournalTrial": true,
+      "recoveryGatesBusinessGatt": true,
+      "longOperationsServiceBle": true,
+      "otaSessionSuspendsBusiness": true,
+      "powerLossJournalPresent": true,
+      "otaStartPersistsBeforeTelink": true,
+      "sameVersionRepairSupported": true,
+      "otaScheduleAckConfigured": true,
+      "businessOperationsGuarded": true,
+      "businessOperationsAvoidCoreJournal": true,
+      "businessInterruptionRecoverable": true,
+      "waveformPayloadsLinked": true,
+      "waveformAutoAttemptPersistedBeforeMtp": true,
+      "waveformManualRepairSupported": true,
+      "otaTimeoutSafeMargin": true,
+      "missingRecoverySymbols": [],
+      "missingJournalSymbols": [],
+      "recoveryFingerprintSymbols": [
+        "AppPower_setTransferActive",
+        "TodooOtaWrite",
+        "entry_ota_mode",
+        "todoo_ota_journal_append_record",
+        "todoo_ota_journal_compact.clone.0",
+        "todoo_ota_journal_create_bank",
+        "todoo_ota_journal_header_valid",
+        "todoo_ota_journal_initialize",
+        "todoo_ota_journal_record_valid",
+        "todoo_ota_journal_set_record_flag",
+        "todoocard_ota_recovery_arm_upgrade",
+        "todoocard_ota_recovery_business_begin",
+        "todoocard_ota_recovery_business_end",
+        "todoocard_ota_recovery_business_interrupted",
+        "todoocard_ota_recovery_early_init",
+        "todoocard_ota_recovery_finish_upgrade",
+        "todoocard_ota_recovery_is_recovery_only",
+        "todoocard_ota_recovery_mark_core_ready",
+        "todoocard_ota_recovery_prepare_upgrade",
+        "todoocard_ota_recovery_service_lifeline"
+      ],
+      "recoveryImplementationFingerprint": "b1af26aebc0417175c5d5acb5a7cd0c00947d5d2aab9099ced11e08a345c4466",
+      "recoveryImplementationRecognized": true
+    },
+    "model": {
+      "packetCount": 6184,
+      "eraseSectorCount": 31,
+      "sourceVersions": 29,
+      "activeSlots": [
+        "A",
+        "B"
+      ],
+      "transferInterruptionCases": 360528,
+      "partialResidueCases": 5471252,
+      "porJournalInterruptionCases": 4247,
+      "porJournalModel": {
+        "cases": 4247,
+        "violations": [],
+        "allSafe": true,
+        "eraseCutsPerHandover": 4097
+      },
+      "businessInterruptionCases": 3,
+      "businessInterruptionModel": {
+        "cases": 3,
+        "events": [
+          {
+            "event": "watchdog-reset",
+            "coreJournalUnchanged": true,
+            "mode": "normal-probation",
+            "automaticReplay": false
+          },
+          {
+            "event": "chip-reset",
+            "coreJournalUnchanged": true,
+            "mode": "normal-probation",
+            "automaticReplay": false
+          },
+          {
+            "event": "power-loss",
+            "coreJournalUnchanged": true,
+            "mode": "normal-probation",
+            "automaticReplay": false
+          }
+        ],
+        "violations": [],
+        "allSafe": true
+      },
+      "waveformInterruptionCases": 36,
+      "waveformInterruptionModel": {
+        "cases": 36,
+        "violations": [],
+        "allSafe": true,
+        "automaticReplayAfterAttempt": false
+      },
+      "persistentStateTransitions": [
+        {
+          "from": "power-on",
+          "event": "boot",
+          "mode": "normal-probation",
+          "to": "core-start"
+        },
+        {
+          "from": "legacy-prior",
+          "event": "first-candidate-boot",
+          "mode": "normal-probation",
+          "to": "core-start"
+        },
+        {
+          "from": "core-start",
+          "event": "watchdog-reset",
+          "mode": "ota-only",
+          "to": "recovery-sticky"
+        },
+        {
+          "from": "core-start",
+          "event": "chip-reset",
+          "mode": "ota-only",
+          "to": "recovery-sticky"
+        },
+        {
+          "from": "core-start",
+          "event": "power-loss",
+          "mode": "ota-only",
+          "to": "journal-armed"
+        },
+        {
+          "from": "core-start",
+          "event": "ble-ota-ready",
+          "mode": "normal",
+          "to": "business-ready"
+        },
+        {
+          "from": "business-active",
+          "event": "watchdog-reset",
+          "mode": "normal-degraded",
+          "to": "business-ready"
+        },
+        {
+          "from": "business-active",
+          "event": "chip-reset",
+          "mode": "normal-degraded",
+          "to": "business-ready"
+        },
+        {
+          "from": "business-active",
+          "event": "power-loss",
+          "mode": "normal-degraded",
+          "to": "business-ready"
+        },
+        {
+          "from": "recovery-sticky",
+          "event": "watchdog-reset",
+          "mode": "ota-only",
+          "to": "recovery-sticky"
+        },
+        {
+          "from": "recovery-sticky",
+          "event": "chip-reset",
+          "mode": "ota-only",
+          "to": "recovery-sticky"
+        },
+        {
+          "from": "normal",
+          "event": "ota-start",
+          "mode": "ota",
+          "to": "upgrade-armed"
+        },
+        {
+          "from": "ota-only",
+          "event": "same-version-repair",
+          "mode": "ota",
+          "to": "upgrade-armed"
+        },
+        {
+          "from": "upgrade-armed",
+          "event": "ota-success-reboot",
+          "mode": "normal-probation",
+          "to": "core-start"
+        },
+        {
+          "from": "journal-upgrade",
+          "event": "power-loss",
+          "mode": "normal-probation",
+          "to": "core-start"
+        },
+        {
+          "from": "journal-healthy",
+          "event": "power-loss",
+          "mode": "normal-probation",
+          "to": "core-start"
+        },
+        {
+          "from": "normal",
+          "event": "ota-failure",
+          "mode": "normal",
+          "to": "business-ready"
+        },
+        {
+          "from": "ota-only",
+          "event": "ota-failure",
+          "mode": "ota-only",
+          "to": "recovery-sticky"
+        },
+        {
+          "from": "journal-torn",
+          "event": "power-cycle",
+          "mode": "ota-only",
+          "to": "journal-armed"
+        }
+      ],
+      "totalCases": 5836085,
+      "invariants": {
+        "partialCandidateNeverBootable": true,
+        "activationMarkerWriteIsOrdered": true,
+        "otaCompletionRebootsCandidate": true,
+        "guardArmedBeforeApplication": true,
+        "bleOtaReadyBeforeBusiness": true,
+        "zeroBondPairingStartsAfterCoreCommit": true,
+        "deepRetentionDoesNotRestartPairing": true,
+        "recoveryBootSkipsBusiness": true,
+        "otaStartArmsCandidateTrial": true,
+        "otaFailureRestoresGuard": true,
+        "otaFailureInvalidatesJournalTrial": true,
+        "recoveryGatesBusinessGatt": true,
+        "longBusinessOperationsServiceBle": true,
+        "otaSessionSuspendsBusiness": true,
+        "powerLossJournalLinked": true,
+        "otaStartPersistsBeforeTelink": true,
+        "sameVersionRecoveryRepairSupported": true,
+        "businessOperationsGuarded": true,
+        "businessOperationsAvoidCoreJournal": true,
+        "businessInterruptionRecoverable": true,
+        "otaTimeoutHasSafeMargin": true,
+        "porJournalCutsFailClosed": true,
+        "businessResetAndPorRemainNormal": true,
+        "waveformAttemptCutsNeverAutoReplay": true,
+        "waveformPayloadsRemainLinked": true,
+        "waveformAutoAttemptPersistsBeforeMtp": true,
+        "waveformManualRepairRemainsAvailable": true,
+        "recoveryImplementationSemanticsRecognized": true
+      },
+      "recoveryOtaGuaranteedByModel": true
+    }
+  },
+  "validatorSha256": "379b29de3fff23197fcf66a9faa14b97ca38abb2a0020f1c584cf01b36dd7887",
+  "proofDocumentSha256": "8c710e35cf07e6b3b5bd2c615e6c260676c4259ce91d3b1dcb0b11810c311b16"
+}

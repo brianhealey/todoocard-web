@@ -6,15 +6,33 @@ import { FirmwarePanel } from './components/FirmwarePanel';
 import { SendPanel } from './components/SendPanel';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SourcePanel, type SourceImage } from './components/SourcePanel';
+import { TabList, TabPanel, type TabDef } from './components/Tabs';
+import { TroubleshootPanel } from './components/TroubleshootPanel';
 import { useClient } from './hooks/useClient';
 import { useSettings } from './hooks/useSettings';
 import { getConfig, type ApiError } from './lib/api';
 import { isWebBluetoothSupported } from './lib/ble';
+import { loadFirmwareCatalog, type FirmwareEntry } from './lib/firmware';
 import { composeToPanel, defaultCompose, defaultProcessing, loadBitmap, prepareFromImageData, type ComposeOptions, type Prepared, type ProcessingOptions } from './lib/compose';
+
+type TabId = 'send' | 'firmware' | 'troubleshoot';
+const TABS: TabDef<TabId>[] = [
+  { id: 'send', label: 'Send' },
+  { id: 'firmware', label: 'Firmware' },
+  { id: 'troubleshoot', label: 'Troubleshoot' },
+];
+const tabFromHash = (): TabId => {
+  const h = typeof location !== 'undefined' ? location.hash.replace(/^#/, '') : '';
+  return TABS.some((t) => t.id === h) ? (h as TabId) : 'send';
+};
 
 export function App() {
   const { settings, setSettings } = useSettings();
-  const { client, info, connected, log, clearLog } = useClient();
+  // One client and one connection, shared by every tab.
+  const { client, info, connected, log, clearLog, adv } = useClient();
+  const [tab, setTabState] = useState<TabId>(tabFromHash);
+  const [bundled, setBundled] = useState<FirmwareEntry[] | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [source, setSource] = useState<SourceImage | null>(null);
@@ -41,6 +59,26 @@ export function App() {
     // Re-fetch when the app token changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.appToken]);
+
+  useEffect(() => {
+    loadFirmwareCatalog()
+      .then(setBundled)
+      .catch((e) => setCatalogError((e as Error).message));
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setTabState(tabFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const setTab = useCallback((id: TabId) => {
+    setTabState(id);
+    try {
+      history.replaceState(null, '', `#${id}`);
+    } catch {
+      /* sandboxed frame: the tab still switches */
+    }
+  }, []);
 
   useEffect(() => {
     if (!source) {
@@ -123,19 +161,53 @@ export function App() {
       )}
       {supported && !secure && <div className="banner error">Web Bluetooth requires a secure context: open this page over https or on localhost.</div>}
 
-      <main className="layout">
-        <aside className="col col-device">
-          <DevicePanel client={client} info={info} connected={connected} />
-          <FirmwarePanel client={client} info={info} connected={connected} />
-        </aside>
-        <section className="col col-image">
-          <SourcePanel settings={settings} config={config} onSource={onSource} current={source} />
-          {sourceError && <div className="banner error">{sourceError}</div>}
-          <Editor bitmap={bitmap} composed={composed} prepared={prepared} compose={compose} setCompose={setCompose} processing={processing} setProcessing={setProcessing} preparing={preparing} />
-        </section>
-        <aside className="col col-send">
-          <SendPanel client={client} info={info} connected={connected} prepared={prepared} sourceName={source?.name} log={log} clearLog={clearLog} debug={settings.debugLog} />
-        </aside>
+      <TabList tabs={TABS} active={tab} onChange={setTab} label="Sections" />
+
+      <main>
+        <TabPanel id="send" active={tab === 'send'}>
+          <div className="layout">
+            <aside className="col col-device">
+              <DevicePanel client={client} info={info} connected={connected} />
+            </aside>
+            <section className="col col-image">
+              <SourcePanel settings={settings} config={config} onSource={onSource} current={source} />
+              {sourceError && <div className="banner error">{sourceError}</div>}
+              <Editor bitmap={bitmap} composed={composed} prepared={prepared} compose={compose} setCompose={setCompose} processing={processing} setProcessing={setProcessing} preparing={preparing} />
+            </section>
+            <aside className="col col-send">
+              <SendPanel client={client} info={info} connected={connected} prepared={prepared} sourceName={source?.name} log={log} clearLog={clearLog} debug={settings.debugLog} />
+            </aside>
+          </div>
+        </TabPanel>
+
+        <TabPanel id="firmware" active={tab === 'firmware'}>
+          <div className="layout layout-firmware">
+            <aside className="col">
+              <DevicePanel client={client} info={info} connected={connected} />
+            </aside>
+            <section className="col">
+              <div className="banner error" role="alert">
+                <strong>Flashing firmware is at your own risk.</strong> It can permanently brick a card. This unofficial tool comes with no warranty, and its author
+                accepts no responsibility for cards damaged by it. Read the full disclaimer below before you send anything.
+              </div>
+              <FirmwarePanel client={client} info={info} connected={connected} log={log} settings={settings} bundled={bundled} catalogError={catalogError} />
+            </section>
+          </div>
+        </TabPanel>
+
+        <TabPanel id="troubleshoot" active={tab === 'troubleshoot'}>
+          <TroubleshootPanel
+            client={client}
+            info={info}
+            connected={connected}
+            log={log}
+            clearLog={clearLog}
+            adv={adv}
+            bundled={bundled}
+            apiVersion={config?.version}
+            onOpenFirmware={() => setTab('firmware')}
+          />
+        </TabPanel>
       </main>
 
       <footer className="foot">
